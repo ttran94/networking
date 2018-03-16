@@ -16,6 +16,7 @@ RTT_PORT = 5050
 class Ringo:
     def __init__(self, flag, local_port, poc_host, poc_port, n):
         self.flag = flag
+        self.local_host = socket.gethostname()
         self.local_port = local_port
         self.poc_host = poc_host
         self.poc_port = poc_port
@@ -25,71 +26,83 @@ class Ringo:
         # self.rtt_matrix = [[math.inf for i in range(n)] for j in range(n)]
         self.rtt_matrix = {}
 
+    # Ping
     def peer_discovery(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(3)  # 3 seconds
-        addr = (self.poc_host, SERVER_PORT)
-        length = 0
-        total = self.n - 1
-        while len(self.peers) < total or length < total:
-            try:
-                # time.sleep(0.05)
-                message = ""
-                if not self.peers:
-                    message = "peer_discovery, no info available"
+        # keep track of peers pinged so far
+        peers_pinged = set()
+        
+        #while len(self.peer_discovery_map) < self.n-1 or min(self.peer_discovery_map.items()) < self.n-1:
+        while len(peers_pinged) < self.n-1:
+            msg = "Peer Discovery/" + self.local_host + ":" + str(self.local_port)
+            # starting ringo doesn't have a PoC; wait until there is a peer
+            if self.poc_host == "0" and len(self.peers) == 0:
+                continue
+            
+            # base case: ringo only has a PoC and no peers
+            elif self.poc_host != "0" and len(self.peers) == 0:
+                addr = (self.poc_host, self.poc_port)
+                try:
+                    _ = s.sendto(msg, addr)
+                    data_sent, recv_addr = s.recvfrom(BUFFER_SIZE)
+                    if (data_sent == msg):
+                        # successfully pinged peer
+                        peers_pinged.add(addr)
+                except socket.timeout:
+                    print("Timed out in attempt to discover peers. Trying again")
+            
+            # ping both poc and peers
+            else:
+                if self.poc_host != "0":
+                    peers_to_ping = [(self.poc_host, self.poc_port)] + list(self.peers)
                 else:
-                    for (peer_ip, peer_port) in self.peers:
-                        message +=  peer_ip + ":" + str(peer_port) + ","
-                    message = "peer_discovery," + message
-                _ = s.sendto(message, addr)
-                data_sent, recv_addr = s.recvfrom(BUFFER_SIZE)
-                length = int(data_sent)
-            except socket.timeout:
-                print("Timed out in attempt to discover peers. Trying again")
-        s.close()
-        print("length ")
-        print(len(self.peers))
-        return self.peers
+                    # case in which host doesn't have a PoC
+                    peers_to_ping = list(self.peers)
+                for peer in peers_to_ping:
+                    try:
+                        _ = s.sendto(msg, peer)
+                        data_sent, recv_addr = s.recvfrom(BUFFER_SIZE)
+                        if (data_sent == msg):
+                            # successfully pinged peer
+                            peers_pinged.add(peer)
+                    except socket.timeout:
+                        print("Timed out in attempt to discover peers. Trying again")
 
-    def add_peers(self, data, address):
-        recv_host = address[0]
-        recv_port = int(address[1])
-        self_host = socket.gethostbyname(socket.gethostname())
-        if recv_host !=  self_host:
-            self.peers.add((recv_host, recv_port))
-        if data != "peer_discovery, no info available":
-            host_port_pairs = data.split(",")
-            host_port_pairs = host_port_pairs[1:len(host_port_pairs) - 1]
-            for pair in host_port_pairs:
-                host_port_pair = pair.split(":")
-                (peer_host, peer_port) = (host_port_pair[0], int(host_port_pair[1]))
-                if peer_host != self_host:
-                    self.peers.add((peer_host, peer_port))
+            time.sleep(0.05)
+        s.close()
+        return
+
 
     def initialize_rtt_vector(self):
         for (peer_host, peer_port) in self.peers:
             self.rtt_vector[peer_host] = float("inf")
 
+    
     # listens to and sends from SERVER_PORT
     def listen(self):
         server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server.bind((socket.gethostname(), SERVER_PORT))
+        server.bind((socket.gethostname(), self.local_port))
         while (1):
             data, address = server.recvfrom(BUFFER_SIZE)
+            addr = (socket.gethostbyaddr(address[0])[0].split(".")[0], address[1])
             length = len(self.peers)
-            if "peer_discovery" in data:
-                if length < self.n - 1:
-                    self.add_peers(data, address)
-                server.sendto(str(length), address)
+            if "Peer Discovery" in data:
+                host_of_sender = data.split("/")[1].split(":")[0]
+                port_of_sender = int(data.split("/")[1].split(":")[1])
+                addr_of_sender = (host_of_sender, port_of_sender)
+                if addr_of_sender != (self.local_host, self.local_port) and addr_of_sender not in self.peers:
+                    self.peers.add(addr_of_sender)
+                server.sendto(data, addr)
             elif "calculating RTT" in data:
-                server.sendto(data, address)
+                server.sendto(data, addr)
             else:
-                server.sendto(data, address)
+                server.sendto(data, addr)
                 time.sleep(0.5)
                 if "rtt_vectors" in data:
                     print("From: ")
-                    print(address)
+                    print(addr)
                     from_host = data.split("/")[1]
                     rtt_vectors = data.split("/")[2]
                     rtt_vec = {}
@@ -134,7 +147,7 @@ class Ringo:
         s.settimeout(2)
         self.initialize_rtt_vector()
         for (peer_ip, peer_port) in self.peers:
-            peer_addr = (peer_ip, SERVER_PORT)
+            peer_addr = (peer_ip, peer_port)
             counter = 0
             time_diff = 0
             while counter < 3:
@@ -198,7 +211,7 @@ class Ringo:
         print("Self RTT")
         print(self.rtt_matrix)
         for (peer_ip, peer_port) in self.peers:
-            peer_addr = (peer_ip, SERVER_PORT)
+            peer_addr = (peer_ip, peer_port)
             try:
                 time.sleep(0.5)
                 _ = s.sendto(msg, peer_addr)
@@ -249,7 +262,8 @@ def main():
     if (len(sys.argv) != 6):
         print("Wrong input")
         return
-    print(socket.gethostbyname(socket.gethostname()))
+    print("IP Address: " + socket.gethostbyname(socket.gethostname()))
+    print("Host name: " + socket.gethostname())
     flag = sys.argv[1]
     local_port = int(sys.argv[2])
     poc_host = sys.argv[3]
@@ -258,18 +272,19 @@ def main():
     ringo = Ringo(flag, local_port, poc_host, poc_port, n)
     help_others = threading.Thread(target=ringo.listen, args=())
     help_others.start()
-    print("started server thread")
-    peers = ringo.peer_discovery()
+    # print("started server thread")
+    ringo.peer_discovery()
     print("Peers: ")
-    print(peers)
-    ringo.calculate_rtt_vector()
-    ringo.send_rtt_vectors()
-    print("Completed RTT Matrix")
-    print(ringo.rtt_matrix)
-    optimal_paths = ringo.optimal_path()
-    print("Optimal Paths:")
-    print(optimal_paths)
+    print(ringo.peers)
+    
+    # ringo.calculate_rtt_vector()
+    # ringo.send_rtt_vectors()
+    # print("Completed RTT Matrix")
+    # print(ringo.rtt_matrix)
+    # optimal_paths = ringo.optimal_path()
+    # print("Optimal Paths:")
+    # print(optimal_paths)
 
-    help_others.join()
+    # help_others.join()
 
 main()
