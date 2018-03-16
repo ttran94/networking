@@ -252,7 +252,7 @@ def main():
 
     print(socket.gethostbyname(socket.gethostname()))
     flag = sys.argv[1]
-    if flag != 'S' or flag != 'R' or flag != 'F':
+    if flag != "S" and flag != "R" and flag != "F":
         print("Flag input must be either S (Sender), R (Receiver) or F (Forwarder)")
         return
     local_port = int(sys.argv[2])
@@ -266,8 +266,7 @@ def main():
     ringo.calculate_rtt_vector()
     ringo.send_rtt_vectors()
     optimal_paths = ringo.optimal_path()
-
-    help_others.join()
+    console.log("Completed")
     while (1):
         command_input = raw_input("Ringo command: ")
         if command_input == "show-matrix":
@@ -278,5 +277,7 @@ def main():
             break
         else:
             print("Please input one of the follow commands: <show-matrix>, <show-ring>, <disconnect>")
+
+    help_others.join()
 
 main()
