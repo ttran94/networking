@@ -4,6 +4,7 @@ import time
 import math
 import time
 import threading
+import operator
 import sys
 import itertools
 
@@ -24,127 +25,141 @@ class Ringo:
         # self.rtt_matrix = [[math.inf for i in range(n)] for j in range(n)]
         self.rtt_matrix = {}
 
-    def peer_discovery(self, flag, poc_host, poc_port, n, peers):
+    def peer_discovery(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(3)  # 3 seconds
-        addr = (poc_host, SERVER_PORT)
-        while len(peers) < n - 1:
-            trial = 0
+        addr = (self.poc_host, SERVER_PORT)
+        length = 0
+        total = self.n - 1
+        while len(self.peers) < total or length < total:
             try:
-                while (trial < 3):
-                    try:
-                        # time.sleep(0.05)
-                        message = ""
-                        if not peers:
-                            message = "no info available"
-                        else:
-                            for (peer_ip, peer_port) in peers:
-                                message += peer_ip + ":" + str(peer_port) + ","
-                        _ = s.sendto(message, addr)
-                        data_sent, recv_addr = s.recvfrom(BUFFER_SIZE)
-                        self.add_peers(data_sent, recv_addr)
-                        response, _ = s.recvfrom(BUFFER_SIZE)
-                        self.add_peers(response, _)
-                        flag = False
-                    except socket.timeout:
-                        print("Timed out in attempt to discover peers. Trying again")
-                        trial += 1
-            finally:
-                if trial == 3:
-                    print("Timed out 3 times, there's something wrong with the peer discovery method")
-                    s.close()
-                    return
-        return peers
+                # time.sleep(0.05)
+                message = ""
+                if not self.peers:
+                    message = "peer_discovery, no info available"
+                else:
+                    for (peer_ip, peer_port) in self.peers:
+                        message +=  peer_ip + ":" + str(peer_port) + ","
+                    message = "peer_discovery," + message
+                _ = s.sendto(message, addr)
+                data_sent, recv_addr = s.recvfrom(BUFFER_SIZE)
+                length = int(data_sent)
+            except socket.timeout:
+                print("Timed out in attempt to discover peers. Trying again")
+        s.close()
+        print("length ")
+        print(len(self.peers))
+        return self.peers
 
     def add_peers(self, data, address):
-        print(data)
-        if data == "no info available":
-            recv_host = address[0]
-            recv_port = int(address[1])
+        recv_host = address[0]
+        recv_port = int(address[1])
+        self_host = socket.gethostbyname(socket.gethostname())
+        if recv_host !=  self_host:
             self.peers.add((recv_host, recv_port))
-        else:
+        if data != "peer_discovery, no info available":
             host_port_pairs = data.split(",")
-            print(host_port_pair)
+            host_port_pairs = host_port_pairs[1:len(host_port_pairs) - 1]
             for pair in host_port_pairs:
                 host_port_pair = pair.split(":")
-                print(host_port_pair)
                 (peer_host, peer_port) = (host_port_pair[0], int(host_port_pair[1]))
-                self.peers.add((peer_host, peer_port))
-
+                if peer_host != self_host:
+                    self.peers.add((peer_host, peer_port))
 
     def initialize_rtt_vector(self):
         for (peer_host, peer_port) in self.peers:
-            self.rtt_vector[peer_host] = math.inf
+            self.rtt_vector[peer_host] = float("inf")
 
     # listens to and sends from SERVER_PORT
     def listen(self):
         server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server_id = (socket.gethostname(), SERVER_PORT)
         server.bind((socket.gethostname(), SERVER_PORT))
         while (1):
             data, address = server.recvfrom(BUFFER_SIZE)
-            server.sendto(data, address)
+            length = len(self.peers)
+            if "peer_discovery" in data:
+                if length < self.n - 1:
+                    self.add_peers(data, address)
+                server.sendto(str(length), address)
+            elif "calculating RTT" in data:
+                server.sendto(data, address)
+            else:
+                server.sendto(data, address)
+                time.sleep(0.5)
+                if "rtt_vectors" in data:
+                    print("From: ")
+                    print(address)
+                    from_host = data.split("/")[1]
+                    rtt_vectors = data.split("/")[2]
+                    rtt_vec = {}
+                    for vector in rtt_vectors.split(","):
+                        host_rtt_pair = vector.split(":")
+                        host = host_rtt_pair[0]
+                        rtt = host_rtt_pair[1]
+                        rtt_vec[host] = float(rtt)
+                    print("RTT Vec: ")
+                    print(rtt_vec)
+                    for host in rtt_vec:
+                        # rtt_matrix[sorted_hosts.index(from_host)][sorted_hosts.index(host)] = sorted_hosts[host]
+                        self.rtt_matrix[(from_host, host)] = rtt_vec[host]
+                    print("RTT Matrix")
+                    print(self.rtt_matrix)
 
-    def receive_rtt_vector(self):
-        server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind(socket.gethostname(), RTT_PORT)
-        while (True):
-            data, address = server.recvfrom(BUFFER_SIZE)
-            server.sendto(data, address)
-            if "rtt_vectors" in data:
-                from_host = data.split("/")[1]
-                rtt_vectors = data.split("/")[2]
-                rtt_vec = {}
-                for vector in rtt_vectors.split(","):
-                    host_rtt_pair = vector.split(":")
-                    host = ip_rtt_pair[0]
-                    rtt = ip_rtt_pair[1]
-                    rtt_vec[host] = int(rtt)
 
-                # sorted_hosts = sorted(rtt_vec.keys(), key=lambda x:x.lower())
-                for host in sorted_hosts:
-                    # rtt_matrix[sorted_hosts.index(from_host)][sorted_hosts.index(host)] = sorted_hosts[host]
-                    self.rtt_matrix[(from_host, host)] = sorted_hosts[host]
-
-                    # sends from and gets responses to local_port
+    # def receive_rtt_vector(self):
+    #     server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    #     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    #     server.bind((socket.gethostname(), RTT_PORT))
+    #     while (1):
+    #         data, address = server.recvfrom(BUFFER_SIZE)
+    #         server.sendto(data, address)
+    #         if "rtt_vectors" in data:
+    #             from_host = data.split("/")[1]
+    #             rtt_vectors = data.split("/")[2]
+    #             rtt_vec = {}
+    #             for vector in rtt_vectors.split(","):
+    #                 host_rtt_pair = vector.split(":")
+    #                 host = ip_rtt_pair[0]
+    #                 rtt = ip_rtt_pair[1]
+    #                 rtt_vec[host] = int(rtt)
+    #             for host in rtt_vec:
+    #                 # rtt_matrix[sorted_hosts.index(from_host)][sorted_hosts.index(host)] = sorted_hosts[host]
+    #                 self.rtt_matrix[(from_host, host)] = sorted_hosts[host]
+    #
+    #                 # sends from and gets responses to local_port
 
     def calculate_rtt_vector(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect((socket.gethostname(), self.local_port))
         s.settimeout(2)
-        initialize_rtt_vector()
+        self.initialize_rtt_vector()
         for (peer_ip, peer_port) in self.peers:
             peer_addr = (peer_ip, SERVER_PORT)
-            trial = 0
-            try:
-                flag = True
-                while (trial < 3 and flag):
-                    try:
-                        send_time = int(time.time()) * 1000000  # time in ms
-                        msg = "calculating RTT"
-                        _ = s.sendto(msg, peer_addr)
-                        data_sent, _ = s.recvfrom(BUFFER_SIZE)
-                        if data_sent != msg:
-                            recv_time = int(time.time()) * 1000000
-                            self.rtt_vector[peer_ip] = recv_time - send_time
-                            flag = False
-                    except socket.timeout:
-                        print("Timed out. Trying again")
-                        trial += 1
-            finally:
-                if trial == 3:
-                    print(socket.gethostname() + " doesn't have direct path to " + peer_ip)
-
+            counter = 0
+            time_diff = 0
+            while counter < 3:
+                try:
+                    send_time = time.time() * 1000  # time in ms
+                    msg = "calculating RTT"
+                    _ = s.sendto(msg, peer_addr)
+                    data_sent, _ = s.recvfrom(BUFFER_SIZE)
+                    if data_sent == msg:
+                        counter += 1
+                        recv_time = time.time() * 1000
+                        time_diff += recv_time - send_time
+                        # self.rtt_vector[peer_ip] = recv_time - send_time
+                except socket.timeout:
+                    print("Timed out. Trying again")
+            self.rtt_vector[peer_ip] = time_diff / 3
+        print(self.rtt_vector)
         s.close()
 
     def get_rtt_vector_msg(self, self_host):
         rtt_vector = self.rtt_vector
-        rtt_vector[socket.gethostname()] = 0
+        rtt_vector[socket.gethostbyname(socket.gethostname())] = 0
         msg = "rtt_vectors/" + self_host + "/"
         for host in rtt_vector.keys():
-            msg += host + ":" + rtt_vector[host] + ","
+            msg += host + ":" + str(rtt_vector[host]) + ","
         if msg:
             msg = msg[:-1]  # remove last comma
         return msg
@@ -163,59 +178,67 @@ class Ringo:
             print("\n")
 
     def make_rtt_matrix_symmetric(self):
-        hosts = [socket.gethostname()] + self.peers
+        hosts = [(socket.gethostbyname(socket.gethostname()), self.local_port)] + list(self.peers)
         for host1 in hosts:
             for host2 in hosts:
-                rtt1 = self.rtt_matrix[(host1, host2)]
-                rtt2 = self.rtt_matrix[(host2, host1)]
+                rtt1 = self.rtt_matrix[(host1[0], host2[0])]
+                rtt2 = self.rtt_matrix[(host2[0], host1[0])]
                 average = (rtt1 + rtt2) / 2
-                self.rtt_matrix[(host1, host2)] = average
-                self.rtt_matrix[(host2, host1)] = average
+                self.rtt_matrix[(host1[0], host2[0])] = average
+                self.rtt_matrix[(host2[0], host1[0])] = average
 
     # send to SERVER PORT or create a new port for that?
     def send_rtt_vectors(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect((socket.gethostname(), self.local_port))
-        s.setimeout(2)
-        msg = get_rtt_vector_msg(socket.gethostname())
+        s.settimeout(2)
+        msg = self.get_rtt_vector_msg(socket.gethostbyname(socket.gethostname()))
+        self.initialize_rtt_matrix()
+        print("Self Vector")
+        print(self.rtt_vector)
+        print("Self RTT")
+        print(self.rtt_matrix)
         for (peer_ip, peer_port) in self.peers:
-            peer_addr = (peer_ip, RTT_PORT)
-            trial = 0
+            peer_addr = (peer_ip, SERVER_PORT)
             try:
-                flag = True
-                while (trial < 3 and flag):
-                    try:
-                        _ = s.sendto(msg, peer_addr)
-                        data_sent, _ = s.recvfrom(BUFFER_SIZE)
-                        if data_sent != msg:
-                            # handle: try again
-                            flag = False
-                    except socket.timeout:
-                        print("Timed out. Trying again")
-                    trial += 1
-            finally:
-                if trial == 3:
-                    print(socket.gethostname() + " doesn't have direct path to " + peer_ip)
+                time.sleep(0.5)
+                _ = s.sendto(msg, peer_addr)
+                data_sent, _ = s.recvfrom(BUFFER_SIZE)
+            # handle: try again
+            except socket.timeout:
+                print("Timed out. Trying again")
+        while len(self.rtt_matrix) != self.n * self.n:
+            time.sleep(0.2)
+        return
+
+    def initialize_rtt_matrix(self):
+        rtt_vector = self.rtt_vector
+        rtt_vector[socket.gethostbyname(socket.gethostname())] = 0
+        for host in rtt_vector:
+            self.rtt_matrix[(socket.gethostbyname(socket.gethostname()), host)] = self.rtt_vector[host]
 
 
 # RTT_MATRIX: {(A,A)->0, (A,B)-> 2, ..., (A->F)->10, (B,A)->2, (B,B)->0, ...}
 # A: B, C, D: ABCDA, ACDBA, AABCD, ACDAB, ....
 # A...A
     def optimal_path(self):
-        possible_orders = list(itertools.permutations([socket.gethostname()] + self.peers + [socket.gethostname()]))
+        hosts = []
+        for peer in self.peers:
+            hosts.append(peer[0])
+        possible_orders = list(itertools.permutations([socket.gethostbyname(socket.gethostname())] + hosts +
+                                                      [socket.gethostbyname(socket.gethostname())]))
         sequence_to_rtt = {}
         for order in possible_orders:
             # starting host must be current ringo
             total_rtt = 0
-            if order[0] != socket.gethostname() and order[-1] != socket.gethostname():
-                continue
-            for i in range(len(order) - 1):
-                pair = order[i:i + 2]
-                from_ringo = pair[0]
-                to_ringo = pair[1]
-                total_rtt += self.rtt_matrix[(from_ringo, to_ringo)]
-
-            sequence_to_rtt[order] = total_rtt
+            if order[0] == socket.gethostbyname(socket.gethostname()) and order[-1] == socket.gethostbyname(socket.gethostname()):
+                for i in range(len(order) - 1):
+                    pair = order[i:i + 2]
+                    from_ringo = pair[0]
+                    to_ringo = pair[1]
+                    total_rtt += self.rtt_matrix[(from_ringo, to_ringo)]
+                sequence_to_rtt[order] = total_rtt
+        print("Sequence RTT")
+        print(sequence_to_rtt)
         sorted_paths = sorted(sequence_to_rtt.items(), key=operator.itemgetter(1))
         return sorted_paths[0]
 
@@ -236,10 +259,17 @@ def main():
     help_others = threading.Thread(target=ringo.listen, args=())
     help_others.start()
     print("started server thread")
-    peers = ringo.peer_discovery(flag, poc_host, poc_port, n, ringo.peers)
+    peers = ringo.peer_discovery()
+    print("Peers: ")
     print(peers)
-    for item in peers:
-        print(item)
+    ringo.calculate_rtt_vector()
+    ringo.send_rtt_vectors()
+    print("Completed RTT Matrix")
+    print(ringo.rtt_matrix)
+    optimal_paths = ringo.optimal_path()
+    print("Optimal Paths:")
+    print(optimal_paths)
+
     help_others.join()
 
 main()
