@@ -9,8 +9,6 @@ import sys
 import itertools
 
 BUFFER_SIZE = 2048
-SERVER_PORT = 5000
-RTT_PORT = 5050
 
 
 class Ringo:
@@ -56,6 +54,7 @@ class Ringo:
             else:
                 if self.poc_host != "0":
                     peers_to_ping = [(self.poc_host, self.poc_port)] + list(self.peers)
+
                 else:
                     # case in which host doesn't have a PoC
                     peers_to_ping = list(self.peers)
@@ -260,11 +259,15 @@ class Ringo:
 
 def main():
     if (len(sys.argv) != 6):
-        print("Wrong input")
+        print("Please provide arguments in the form: ringo.py <flag> <local-port> <PoC-name>" +
+              "<PoC-port>>")
         return
     print("IP Address: " + socket.gethostbyname(socket.gethostname()))
     print("Host name: " + socket.gethostname())
     flag = sys.argv[1]
+    if flag != "S" and flag != "R" and flag != "F":
+        print("Flag input must be either S (Sender), R (Receiver) or F (Forwarder)")
+        return
     local_port = int(sys.argv[2])
     poc_host = sys.argv[3]
     poc_port = int(sys.argv[4])
@@ -272,18 +275,21 @@ def main():
     ringo = Ringo(flag, local_port, poc_host, poc_port, n)
     help_others = threading.Thread(target=ringo.listen, args=())
     help_others.start()
-    # print("started server thread")
     ringo.peer_discovery()
-    print("Peers: ")
-    print(ringo.peers)
-    
-    # ringo.calculate_rtt_vector()
-    # ringo.send_rtt_vectors()
-    # print("Completed RTT Matrix")
-    # print(ringo.rtt_matrix)
-    # optimal_paths = ringo.optimal_path()
-    # print("Optimal Paths:")
-    # print(optimal_paths)
+    ringo.calculate_rtt_vector()
+    ringo.send_rtt_vectors()
+    optimal_paths = ringo.optimal_path()
+    print("Completed")
+    while (1):
+        command_input = raw_input("Ringo command: ")
+        if command_input == "show-matrix":
+            print(ringo.print_rtt_matrix())
+        elif command_input == "show-ring":
+            print(optimal_paths)
+        elif command_input == "disconnect":
+            break
+        else:
+            print("Please input one of the follow commands: <show-matrix>, <show-ring>, <disconnect>")
 
     # help_others.join()
 
