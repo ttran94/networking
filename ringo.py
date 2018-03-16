@@ -9,8 +9,6 @@ import sys
 import itertools
 
 BUFFER_SIZE = 2048
-SERVER_PORT = 5000
-RTT_PORT = 5050
 
 
 class Ringo:
@@ -28,7 +26,7 @@ class Ringo:
     def peer_discovery(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(3)  # 3 seconds
-        addr = (self.poc_host, SERVER_PORT)
+        addr = (self.poc_host, self.local_port)
         length = 0
         total = self.n - 1
         while len(self.peers) < total or length < total:
@@ -74,7 +72,7 @@ class Ringo:
     def listen(self):
         server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server.bind((socket.gethostname(), SERVER_PORT))
+        server.bind((socket.gethostname(), self.local_port))
         while (1):
             data, address = server.recvfrom(BUFFER_SIZE)
             length = len(self.peers)
@@ -134,7 +132,7 @@ class Ringo:
         s.settimeout(2)
         self.initialize_rtt_vector()
         for (peer_ip, peer_port) in self.peers:
-            peer_addr = (peer_ip, SERVER_PORT)
+            peer_addr = (peer_ip, self.local_port)
             counter = 0
             time_diff = 0
             while counter < 3:
@@ -198,7 +196,7 @@ class Ringo:
         print("Self RTT")
         print(self.rtt_matrix)
         for (peer_ip, peer_port) in self.peers:
-            peer_addr = (peer_ip, SERVER_PORT)
+            peer_addr = (peer_ip, self.local_port)
             try:
                 time.sleep(0.5)
                 _ = s.sendto(msg, peer_addr)
@@ -247,10 +245,16 @@ class Ringo:
 
 def main():
     if (len(sys.argv) != 6):
-        print("Wrong input")
+        print("Please provide arguments in the form: ringo.py <flag> <local-port> <PoC-name>" +
+              "<PoC-port>>")
         return
+
+
     print(socket.gethostbyname(socket.gethostname()))
     flag = sys.argv[1]
+    if flag != 'S' or flag != 'R' or flag != 'F':
+        print("Flag input must be either S (Sender), R (Receiver) or F (Forwarder)")
+        return
     local_port = int(sys.argv[2])
     poc_host = sys.argv[3]
     poc_port = int(sys.argv[4])
@@ -258,18 +262,21 @@ def main():
     ringo = Ringo(flag, local_port, poc_host, poc_port, n)
     help_others = threading.Thread(target=ringo.listen, args=())
     help_others.start()
-    print("started server thread")
-    peers = ringo.peer_discovery()
-    print("Peers: ")
-    print(peers)
+    ringo.peer_discovery()
     ringo.calculate_rtt_vector()
     ringo.send_rtt_vectors()
-    print("Completed RTT Matrix")
-    print(ringo.rtt_matrix)
     optimal_paths = ringo.optimal_path()
-    print("Optimal Paths:")
-    print(optimal_paths)
 
     help_others.join()
+    while (1):
+        command_input = raw_input("Ringo command: ")
+        if command_input == "show-matrix":
+            print(ringo.print_rtt_matrix())
+        elif command_input == "show-ring":
+            print(optimal_paths)
+        elif command_input == "disconnect":
+            break
+        else:
+            print("Please input one of the follow commands: <show-matrix>, <show-ring>, <disconnect>")
 
 main()
