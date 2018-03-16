@@ -266,7 +266,7 @@ def main():
     ringo.calculate_rtt_vector()
     ringo.send_rtt_vectors()
     optimal_paths = ringo.optimal_path()
-    console.log("Completed")
+    print("Completed")
     while (1):
         command_input = raw_input("Ringo command: ")
         if command_input == "show-matrix":
