@@ -181,17 +181,19 @@ class Ringo:
     def print_rtt_matrix(self):
         all_ringos = [(socket.gethostname(), self.local_port)] + list(self.peers)
         sorted_ringos = sorted(all_ringos)
-        print("Sorted Ringos:")
-        print(sorted_ringos)
-        print("RTT Matrix (in ms)")
+        print("\nRTT Matrix (in ms)")
         sys.stdout.write("                ")
         for host1, port1 in sorted_ringos:
             sys.stdout.write(" " + host1 + ":" + str(port1))
         sys.stdout.write("\n")
         for from_host, from_port in sorted_ringos:
             sys.stdout.write(from_host + ":" + str(from_port))
+            i = 0
             for to_host, to_port in sorted_ringos:
-                sys.stdout.write("         " + str(round(self.rtt_matrix[(from_host, from_port, to_host, to_port)], 2)) + "         ")
+                if i == 0:
+                    sys.stdout.write("      " + str(round(self.rtt_matrix[(from_host, from_port, to_host, to_port)], 2)) + "      ")
+                else:
+                    sys.stdout.write(str(round(self.rtt_matrix[(from_host, from_port, to_host, to_port)], 2)) + "      ")
             sys.stdout.write("\n")
 
 
