@@ -243,7 +243,12 @@ def main():
         print("Flag input must be either S (Sender), R (Receiver) or F (Forwarder)")
         return
     local_port = int(sys.argv[2])
-    poc_host = sys.argv[3]
+    input_poc_host = sys.argv[3]
+    poc_host = ""
+    if len(input_poc_host.split(".")) == 4:
+        poc_host = socket.gethostbyaddr(input_poc_host)[0].split(".")[0]
+    else:
+        poc_host = input_poc_host
     poc_port = int(sys.argv[4])
     n = int(sys.argv[5])
     ringo = Ringo(flag, local_port, poc_host, poc_port, n)
