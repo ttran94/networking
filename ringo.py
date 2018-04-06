@@ -162,7 +162,6 @@ class Ringo:
             time.sleep(15)
             for peer in self.offlineRingos:
                 try:
-                    time.sleep(15)
                     _ = s.sendto(msg, peer)
                     data_sent, _ = s.recvfrom(BUFFER_SIZE)
                     self.offlineRingos.remove(peer)
@@ -267,7 +266,7 @@ def main():
     print("IP Address: " + socket.gethostbyname(socket.gethostname()))
     print("Host name: " + socket.gethostname())
     flag = sys.argv[1]
-    if flag != "S" and flag != "R" and flag != "F":
+    if flag != "S" or flag != "R" or flag != "F":
         print("Flag input must be either S (Sender), R (Receiver) or F (Forwarder)")
         return
     local_port = int(sys.argv[2])
