@@ -145,7 +145,7 @@ class Ringo:
         msg = "Keep Alive"
         while (1):
             time.sleep(60)
-            for peer in self.offlineRingos:
+            for peer in self.activeRingos:
                 try:
                     _ = s.sendto(msg, peer)
                     data_sent, _ = s.recvfrom(BUFFER_SIZE)
@@ -282,13 +282,13 @@ def main():
     help_others = threading.Thread(target=ringo.listen, args=())
     help_others.start()
     ringo.peer_discovery()
-    ringo.calculate_rtt_vector()
-    ringo.send_rtt_vectors()
-    total_rtt, optimal_path = ringo.optimal_path()
     active_ringos = threading.Thread(target=ringo.check_active_ringos, args=())
     active_ringos.start()
     offline_ringos = threading.Thread(target=ringo.check_offline_ringos, args=())
     offline_ringos.start()
+    ringo.calculate_rtt_vector()
+    ringo.send_rtt_vectors()
+    total_rtt, optimal_path = ringo.optimal_path()
 
     while (1):
         command_input = raw_input("Ringo command: ")
