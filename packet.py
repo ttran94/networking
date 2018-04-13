@@ -31,7 +31,7 @@ class Packet:
 		## UDP Header (18 bytes + data)
 		self.udp_src_port = src_port # 2 bytes
 		self.udp_dst_port = dst_port # 2 bytes
-		self.udp_length = len(data) + 18 # 2 bytes; size of UDP header + UDP data / 8 + (512 - 8 - IP header size)
+		self.udp_length = len(data) + 18 # 2 bytes; size of UDP header + UDP data
 		self.udp_checksum = 0 # 2 bytes (includes src/dst addr, reserved set to all 0s, protocol taken from IP header, length, data)
 		self.udp_seq = udp_seq # 4 bytes
 		self.udp_ack_seq = udp_ack_seq # 4 bytes
@@ -162,6 +162,7 @@ def verify_udp_checksum(packet_udp, data):
 
 
 if __name__ == '__main__':
+
 
 	packet = Packet(8000, 1234, '127.0.0.1', '192.134.0.241', ControlType.DATA, "This is sample data I am testing for the CS 3251 - Networking I project", 134, 0);
 	packet.assemble_packet()
