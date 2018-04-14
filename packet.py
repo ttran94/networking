@@ -162,7 +162,17 @@ def verify_udp_checksum(packet_udp, data):
 
 
 if __name__ == '__main__':
+	# with open("test_file.pdf", "rb") as f:
+	# 	original_data = f.read()
 
+	# final_data = bytes()
+	# for i in range(0, 25, DATA_PER_PACKET):
+	# 	original_data[i:i+4]
+	# 	encoded_data = base64.b64encode(original_data)
+	# 	final_data += encoded_data
+
+	# with open("out_file.pdf", "wb") as f:
+	# 	f.write(base64.b64decode(final_data))
 
 	packet = Packet(8000, 1234, '127.0.0.1', '192.134.0.241', ControlType.DATA, "This is sample data I am testing for the CS 3251 - Networking I project", 134, 0);
 	packet.assemble_packet()

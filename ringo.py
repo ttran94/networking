@@ -7,13 +7,16 @@ import threading
 import operator
 import sys
 import itertools
+import errno
 
-BUFFER_SIZE = 2048
 
+
+BUFFER_SIZE = 2048  # if you change this to 512, parts from first assignment fail as  more than 512 bytes is sent in some instances.
+DATA_PER_PACKET = 484
 
 class Ringo:
     def __init__(self, flag, local_port, poc_host, poc_port, n):
-        self.flag = flag
+        self.role = flag
         self.local_host = socket.gethostname()
         self.local_port = local_port
         self.poc_host = poc_host
@@ -21,7 +24,7 @@ class Ringo:
         self.n = n
         self.peers = set()  # {(ip, port), (ip, port)}
         self.rtt_vector = {}
-        # self.rtt_matrix = [[math.inf for i in range(n)] for j in range(n)]
+        self.roles = {}  # {{ip, port}: <role>}
         self.rtt_matrix = {}
 
     # Ping
@@ -30,7 +33,7 @@ class Ringo:
         s.settimeout(3)  # 3 seconds
         # keep track of peers pinged so far
         peer_discovery_map = {}
-        while len(peer_discovery_map) < self.n-1 or min(peer_discovery_map.items()) < self.n-1:
+        while len(peer_discovery_map) < self.n - 1 or min(peer_discovery_map.items()) < self.n-1:
             msg = "Peer Discovery/" + self.local_host + ":" + str(self.local_port)
             # starting ringo doesn't have a PoC; wait until there is a peer
             if self.poc_host == "0" and len(self.peers) == 0:
@@ -71,7 +74,7 @@ class Ringo:
         s.close()
         return
 
-    
+
     # listens to and sends from SERVER_PORT
     def listen(self):
         server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -86,13 +89,15 @@ class Ringo:
                     host_of_peer = peer.split(":")[0]
                     port_of_peer = int(peer.split(":")[1])
                     addr_of_peer = (host_of_peer, port_of_peer)
-
                     if addr_of_peer != (self.local_host, self.local_port) and addr_of_peer not in self.peers:
                         self.peers.add(addr_of_peer)
                 server.sendto(str(len(self.peers)), addr)  # send back the number of peers it has
             elif "RTT" in data:
                 server.sendto(data, addr)
-            else:
+                host_of_peer = data.split("/")[1].split(":")[0]
+                port_of_peer = int(data.split("/")[1].split(":")[1])
+                self.roles[(host_of_peer, port_of_peer)] = data.split("/")[2]
+            elif "rtt_vectors" in data:
                 server.sendto(data, addr)
                 time.sleep(0.5)
                 if "rtt_vectors" in data:
@@ -115,18 +120,19 @@ class Ringo:
         for peer in self.peers:
             self.rtt_vector[peer] = float("inf")
 
- 
+
     def calculate_rtt_vector(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(2)
         self.initialize_rtt_vector()
+        self.roles[(self.local_host, int(self.local_port))] = self.role
         for peer in self.peers:
             counter = 0
             time_diff = 0
             while counter < 3:
                 try:
                     send_time = time.time() * 1000  # time in ms
-                    msg = "RTT"
+                    msg = "RTT/" + self.local_host + ":" + str(self.local_port) + "/" + self.role
                     _ = s.sendto(msg, peer)
                     data_sent, _ = s.recvfrom(BUFFER_SIZE)
                     if data_sent == msg:
@@ -135,7 +141,7 @@ class Ringo:
                         time_diff += recv_time - send_time
                         # self.rtt_vector[peer_ip] = recv_time - send_time
                 except socket.timeout:
-                    print("Timed out. Trying again")
+                    print("Timed out in calculating RTT Vector. Trying again")
             self.rtt_vector[peer] = time_diff / 3
         s.close()
 
@@ -153,7 +159,7 @@ class Ringo:
                 data_sent, _ = s.recvfrom(BUFFER_SIZE)
             # handle: try again
             except socket.timeout:
-                print("Timed out. Trying again")
+                print("Timed out in sending RTT Vectors for RTT mattrix. Trying again")
         while len(self.rtt_matrix) != self.n * self.n:
             time.sleep(0.2)
         return
@@ -212,12 +218,14 @@ class Ringo:
         hosts = []
         for peer in self.peers:
             hosts.append(peer[0] + ":" + str(peer[1]))
+
         possible_orders = list(itertools.permutations([socket.gethostname() + ":" + str(self.local_port)] + hosts +
                                                       [socket.gethostname() + ":" + str(self.local_port)]))
         sequence_to_rtt = {}
         for order in possible_orders:
             # starting host must be current ringo
             total_rtt = 0
+            # rather than having the current ringo as starting point of the optimal path, use sender as starting point
             if order[0] == socket.gethostname() + ":" + str(self.local_port) and order[-1] == socket.gethostname() + ":" + str(self.local_port):
                 for i in range(len(order) - 1):
                     pair = order[i:i+2]
@@ -226,7 +234,113 @@ class Ringo:
                     total_rtt += self.rtt_matrix[(from_ringo[0], int(from_ringo[1]), to_ringo[0], int(to_ringo[1]))]
                 sequence_to_rtt[order] = total_rtt
         sorted_paths = sorted(sequence_to_rtt.items(), key=operator.itemgetter(1))
-        return sorted_paths[0][1], sorted_paths[0][0][:-1]
+        return sorted_paths[0][1], sorted_paths[0][0][:-1]   
+
+
+    # This method gives the best path and worst path (to be used when one of the ringos go offline in the best path)
+    def establish_path(self):
+        _, ring = self.optimal_path()
+        path = [(ringo.split(":")[0], int(ringo.split(":")[1])) for ringo in ring]
+
+        for peer in ring:
+            addr = peer.split(":")[0]
+            port = int(peer.split(":")[1])
+
+        print('roles ', self.roles)
+        for peer in self.roles:
+            # Sender
+            if self.roles[peer] == "S":
+                sender = peer
+            elif self.roles[peer] == "R":
+                receiver = peer
+       
+        print('path ' , path)
+        print('sender ', sender)
+        start_pos = path.index(sender)  # should be 0
+        print('receiver', receiver)
+        end_pos = path.index(receiver)  # anywhere from 1 to N - 1
+        clockwise_path = [path[start_pos]]
+        # Path 1 (clockwise)
+        clockwise_rtt = 0
+        if end_pos > start_pos:
+            # [F F F S F F F F R]
+            for i in range(start_pos, end_pos):
+                from_ringo_addr = path[i][0]
+                from_ringo_port = path[i][1]
+                to_ringo_addr = path[i+1][0]
+                to_ringo_port = path[i+1][1]
+                clockwise_path.append(path[i+1])
+                clockwise_rtt += self.rtt_matrix[(from_ringo_addr, from_ringo_port, to_ringo_addr, to_ringo_port)]
+        else:
+            # [ F R F F S F F F F F]
+            for i in range(start_pos, len(path)-1):
+                # covers from S until last position in path
+                from_ringo_addr = path[i][0]
+                from_ringo_port = path[i][1]
+                to_ringo_addr = path[i+1][0]
+                to_ringo_port = path[i+1][1]
+                clockwise_path.append(path[i+1])
+                clockwise_rtt += self.rtt_matrix[(from_ringo_addr, from_ringo_port, to_ringo_addr, to_ringo_port)]
+
+            # from last position in path to front of path
+            clockwise_path.append(path[0])
+            clockwise_rtt += self.rtt_matrix[(path[len(path)-1][0], path[len(path)-1][1], path[0][0], path[0][1])]
+            for i in range(0, end_pos):
+                # covers from front to R
+                from_ringo_addr = path[i][0]
+                from_ringo_port = path[i][1]
+                to_ringo_addr = path[i+1][0]
+                to_ringo_port = path[i+1][1]
+                clockwise_path.append(path[i+1])
+                clockwise_rtt += self.rtt_matrix[(from_ringo_addr, from_ringo_port, to_ringo_addr, to_ringo_port)]
+
+        print(clockwise_rtt)
+        print(clockwise_path)
+
+        # Path 2 (counter-clockwise)
+        counter_clockwise_path = [path[start_pos]]
+        counter_clockwise_rtt = 0
+        if end_pos < start_pos:
+            # [R F F S F F F F F]
+            for i in range(start_pos, end_pos, -1):
+                from_ringo_addr = path[i][0]
+                from_ringo_port = path[i][1]
+                to_ringo_addr = path[i-1][0]
+                to_ringo_port = path[i-1][1]
+                counter_clockwise_path.append(path[i-1])
+                counter_clockwise_rtt += self.rtt_matrix[(from_ringo_addr, from_ringo_port, to_ringo_addr, to_ringo_port)]
+        else:
+            # [F F F R F F S F F]
+            for i in range(start_pos, 0, -1):
+                from_ringo_addr = path[i][0]
+                from_ringo_port = path[i][1]
+                to_ringo_addr = path[i-1][0]
+                to_ringo_port = path[i-1][1]
+                counter_clockwise_path.append(path[i-1])
+                counter_clockwise_rtt += self.rtt_matrix[(from_ringo_addr, from_ringo_port, to_ringo_addr, to_ringo_port)]
+
+            # from front to last position in path
+            counter_clockwise_path.append(path[len(path) - 1])
+            counter_clockwise_rtt += self.rtt_matrix[(path[0][0], path[0][1], path[len(path)-1][0], path[len(path)-1][1])]
+
+            for i in range(len(path) - 1, end_pos, -1):
+                from_ringo_addr = path[i][0]
+                from_ringo_port = path[i][1]
+                to_ringo_addr = path[i-1][0]
+                to_ringo_port = path[i-1][1]
+                counter_clockwise_path.append(path[i-1])
+                counter_clockwise_rtt += self.rtt_matrix[(from_ringo_addr, from_ringo_port, to_ringo_addr, to_ringo_port)]
+
+        print(counter_clockwise_rtt)
+        print(counter_clockwise_path)
+        if (clockwise_rtt <= counter_clockwise_path):
+            fast_path = clockwise_path
+            slow_path = counter_clockwise_path
+        else:
+            fast_path = counter_clockwise_path
+            slow_path = clockwise_path
+
+        return fast_path, slow_path
 
 
 # input format: ringo <flag> <local-port> <PoC-name> <PoC-port> <N>
@@ -234,7 +348,7 @@ class Ringo:
 def main():
     if (len(sys.argv) != 6):
         print("Please provide arguments in the form: ringo.py <flag> <local-port> <PoC-name>" +
-              "<PoC-port>>")
+              " <PoC-port> <N>")
         return
     print("IP Address: " + socket.gethostbyname(socket.gethostname()))
     print("Host name: " + socket.gethostname())
@@ -254,10 +368,11 @@ def main():
     ringo = Ringo(flag, local_port, poc_host, poc_port, n)
     help_others = threading.Thread(target=ringo.listen, args=())
     help_others.start()
-    ringo.peer_discovery()    
+    ringo.peer_discovery()
     ringo.calculate_rtt_vector()
     ringo.send_rtt_vectors()
     total_rtt, optimal_path = ringo.optimal_path()
+    ringo.establish_path()
     
     while (1):
         command_input = raw_input("Ringo command: ")
@@ -270,6 +385,9 @@ def main():
             print(total_rtt)
         elif command_input == "disconnect":
             break
+        elif "send" in command_input:
+            filename = command_input.split(" ")[1]
+            send_file(filename)
         else:
             print("Please input one of the follow commands: <show-matrix>, <show-ring>, <disconnect>")
 
