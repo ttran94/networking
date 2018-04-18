@@ -19,35 +19,6 @@ from packet import ControlType
 from enum import Enum
 
 
-# NOTES
-# set retransmission timeout based on average of RTT matrix
-# number of bits for sequence number: 1MB/64kb --> 16 RTTs; lets say at most 64 RTTs --> 6 bits
-# once RTT matrix if formed, choose optimal path; there are only 2 paths, one in opposite direction of other.
-# in case of retransmission, choose the opposite non-optimal path. When it comes back online, choose optimal path again.
-# re-compute optimal path after completing transfer of data
-
-# for any ringo that goes offline, it needs to re-calculate optimal ring/RTT matrix. Rather than recalculate, maybe one of the other ringos (sender/receiver) can send the RTT matrix and RTT vector to it.
-# This process will lead to re-calculation of RTT matrix for all ringos.
-
-# node will not go offline during peer discovery
-# node may go offline while calculating RTT. In this case, wait till ringo comes back online to complete RTT calculation.
-# calculate the optimal ring only once. When ringo goes offline on optimal path, use other path until that ringo comes back online.
-
-# implement Disconnect <T>: https://www.youtube.com/watch?v=XndHx3EaDgA
-# use 2 threads: one for sending and receiving ACKs from those messages (PoC). Other for receiving messages from other Ringos.
-# At the beginning, communicate to each other the roles of each ringo so they all know who the sender/receiver is.
-
-# Any ringo, including the initial one, might be taken offline.
-# In this case, you can simply choose one of the remaining, online ringos as the initial PoC.
-
-# If the ringo goes offline using the "Disconnect <T>" command as in the writeup.  When it goes back on line (after the T seconds) it will
-# be functional but does not remember any PoC. So the only way it can get back in the ring is if it hears Keepalive messages from other Ringos. 
-# You can make it so that the keepalive message have all the time information (Ringo addresses and RTT matrix).  That way, when the recovered 
-# Ringo hears its first Keepalive message after recoivery it will have all the information it needs to get back in the ring.
-
-# Data sent around in the first part of the assignment probably needs to use packet structure as well.
-
-
 BUFFER_SIZE = 2048  # if you change this to 512, parts from first assignment fail as  more than 512 bytes is sent in some instances.
 DATA_PER_PACKET = 475
 
@@ -181,7 +152,8 @@ class Ringo:
 			src_addr = socket.inet_ntoa(struct.pack('!L', src_addr))
 			dst_addr = socket.inet_ntoa(struct.pack('!L', dst_addr))
 			(udp_seq, udp_ack_seq, control, data_len) = struct.unpack_from("!LLBH", packet, offset=26)
-			byte_data = struct.unpack_from("!" + "s" * data_len, packet, offset=-data_len)
+			data_length = len(packet) - 37
+			byte_data = struct.unpack_from("!" + "s" * data_length, packet, offset=-data_length)
 			data_recvd = bytes()
 			for d in byte_data:
 				data_recvd += d
@@ -303,9 +275,9 @@ class Ringo:
 					if self.role == "R":
 						print('Finished receiving entire file.')
 						self.file_received = base64.b64decode(data_recvd).decode('utf-8')
-						self.assemble_data()
 						index = self.path.index((self.local_host, self.local_port))
 						self.acknowledge_fin(self.path[index-1][0], self.path[index-1][1])
+						self.assemble_data()
 					elif self.role == "F":
 						print('received FIN from ', addr[0])
 						if (self.local_host, self.local_port) in self.path:
@@ -692,6 +664,15 @@ class Ringo:
 		if (self.local_host, self.local_port) not in self.active_ringos:
 			self.active_ringos.add((self.local_host, self.local_port))
 
+		for peer in self.roles:
+			if self.roles[peer] == "S":
+				sender = peer
+			elif self.roles[peer] == "R":
+				receiver = peer
+
+		safe_path = []
+		safe_path.append(sender)
+		safe_path.append(receiver)
 		cw_path, cw_rtt, ccw_path, ccw_rtt = self.establish_path()
 		# determine optimal path then its validity based on active ringos
 		if cw_rtt <= ccw_rtt:
@@ -707,6 +688,8 @@ class Ringo:
 				print('Path chosen: ', self.path)
 				return
 			else:
+				self.path = safe_path
+				print(self.path)
 				print('Neither paths are available. More than 1 ringo is offline.')
 				return
 		else:
@@ -723,6 +706,8 @@ class Ringo:
 				print('Path chosen: ', self.path)
 				return
 			else:
+				self.path = safe_path
+				print(self.path)
 				print('Neither paths are available. More than 1 ringo is offline.')
 				return
 
@@ -880,7 +865,7 @@ class Ringo:
 		# only send once
 		success = False
 		while not success:
-			print('stuck in acknowledging FIN')
+			print('sending ACK FIN to ', dst_addr)
 			try:
 				time.sleep(0.1)
 				_ = s.sendto(packet.raw, (dst_addr, dst_port))
@@ -936,7 +921,11 @@ class Ringo:
 
 	def assemble_data(self):
 		#data_with_padding = "=" * ((4 - len(self.data_recvd) % 4) % 4) # to resolve any padding issues
-		data = base64.b64decode(self.data_recvd)
+		try:
+			data = base64.b64decode(self.data_recvd)
+		except binascii.Error:
+			data = base64.decodebytes(self.data_recvd)
+		# data = base64.b64decode(self.data_recvd)
 		# after/before sending FIN, make sure to send the filename along with extension; otherwise it'd be impossible to correctly reconstruct data
 		with open(self.file_received, "wb") as f:
 		   f.write(data)
@@ -984,7 +973,7 @@ class Ringo:
 					# ping each peer continuously for 7.5 seconds. If failed both times then that ringo is offline
 					start_time = time.time() # time since packet sent in s
 					time_elapsed = 0
-					while peer not in self.active_ringo_map and time_elapsed < 10:
+					while peer not in self.active_ringo_map and time_elapsed < 12.5:
 						# skip if pinging succeeded in first trial
 						if peer in self.active_ringo_map:
 							continue
@@ -1000,7 +989,8 @@ class Ringo:
 							src_addr = socket.inet_ntoa(struct.pack('!L', src_addr))
 							dst_addr = socket.inet_ntoa(struct.pack('!L', dst_addr))
 							(udp_seq, udp_ack_seq, control, data_len) = struct.unpack_from("!LLBH", data_sent, offset=26)
-							byte_data = struct.unpack_from("!" + "s" * data_len, data_sent, offset=-data_len)
+							data_length = len(data_sent) - 37
+							byte_data = struct.unpack_from("!" + "s" * data_length, data_sent, offset=-data_length)
 							data_recvd = bytes()
 							for d in byte_data:
 								data_recvd += d
@@ -1053,7 +1043,8 @@ class Ringo:
 			peer2 = rtt.split("=")[0].split(",")[1]
 			self.rtt_matrix[(peer1.split(":")[0], int(peer1.split(":")[1]), peer2.split(":")[0], int(peer2.split(":")[1]))] = float(rtt.split("=")[1])
 
-		self.peers.remove((self.local_host, self.local_port))
+		if (self.local_host, self.local_port) in self.peers:
+			self.peers.remove((self.local_host, self.local_port))
 		for peer in self.peers:
 			self.rtt_vector[peer] = self.rtt_matrix[(self.local_host, self.local_port, peer[0], peer[1])]
 
