@@ -103,13 +103,25 @@ class Ringo:
 				success = False
 				while not success:
 					try:
-						#_ = s.sendto(msg.encode('utf-8'), addr)
-						_ = s.sendto(base64.b64encode(msg.encode('utf-8')), addr)
-						data_recvd, _ = s.recvfrom(BUFFER_SIZE)
-						data_recvd = base64.b64decode(data_recvd).decode('utf-8')
-						# peers_discovered_by_peer = int(data_recvd.decode('utf-8'))
-						peers_discovered_by_peer = int(data_recvd)
-						peer_discovery_map[addr[0] + ":" + str(addr[1])] = peers_discovered_by_peer
+						data = base64.b64encode(msg.encode('utf-8'))
+						packet = Packet(addr[1], self.local_port, socket.gethostbyname(addr[0]), socket.gethostbyname(socket.gethostname()), ControlType.INIT, data, 0, 0)
+						packet.assemble_packet()
+						_ = s.sendto(packet.raw, addr)
+						data_sent, _ = s.recvfrom(65535)
+						(src_addr, dst_addr, _, _, src_port, dst_port) = struct.unpack_from("!LLBBHH", data_sent)
+						src_addr = socket.inet_ntoa(struct.pack('!L', src_addr))
+						dst_addr = socket.inet_ntoa(struct.pack('!L', dst_addr))
+						(udp_seq, udp_ack_seq, control, data_len) = struct.unpack_from("!LLBH", data_sent, offset=26)
+						data_length = len(data_sent) - 37
+						byte_data = struct.unpack_from("!" + "s" * data_length, data_sent, offset=-data_length)
+						data_recvd = bytes()
+						for d in byte_data:
+							data_recvd += d
+
+						if verify_ip_checksum(data_sent) and verify_udp_checksum(data_sent, data_recvd):
+							if control == ControlType.INIT.value:
+								data_recvd = base64.b64decode(data_recvd).decode('utf-8')
+								peer_discovery_map[addr[0] + ":" + str(addr[1])] = int(data_recvd)
 						success = True
 					except socket.timeout:
 						pass
@@ -128,13 +140,25 @@ class Ringo:
 					success = False
 					while not success:
 						try:
-							#_ = s.sendto(msg.encode('utf-8'), peer)
-							_ = s.sendto(base64.b64encode(msg.encode('utf-8')), peer)
-							data_recvd, _ = s.recvfrom(BUFFER_SIZE)
-							data_recvd = base64.b64decode(data_recvd).decode('utf-8')
-							#peers_discovered_by_peer = int(data_recvd.decode('utf-8'))
-							peers_discovered_by_peer = int(data_recvd)
-							peer_discovery_map[peer[0] + ":" + str(peer[1])] = peers_discovered_by_peer
+							data = base64.b64encode(msg.encode('utf-8'))
+							packet = Packet(peer[1], self.local_port, socket.gethostbyname(peer[0]), socket.gethostbyname(socket.gethostname()), ControlType.INIT, data, 0, 0)
+							packet.assemble_packet()
+							_ = s.sendto(packet.raw, peer)
+							data_sent, _ = s.recvfrom(65535)
+							(src_addr, dst_addr, _, _, src_port, dst_port) = struct.unpack_from("!LLBBHH", data_sent)
+							src_addr = socket.inet_ntoa(struct.pack('!L', src_addr))
+							dst_addr = socket.inet_ntoa(struct.pack('!L', dst_addr))
+							(udp_seq, udp_ack_seq, control, data_len) = struct.unpack_from("!LLBH", data_sent, offset=26)
+							data_length = len(data_sent) - 37
+							byte_data = struct.unpack_from("!" + "s" * data_length, data_sent, offset=-data_length)
+							data_recvd = bytes()
+							for d in byte_data:
+								data_recvd += d
+
+							if verify_ip_checksum(data_sent) and verify_udp_checksum(data_sent, data_recvd):
+								if control == ControlType.INIT.value:
+									data_recvd = base64.b64decode(data_recvd).decode('utf-8')
+									peer_discovery_map[peer[0] + ":" + str(peer[1])] = int(data_recvd)
 							success = True
 						except socket.timeout:
 							pass
@@ -151,37 +175,49 @@ class Ringo:
 		server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 		server.bind((socket.gethostname(), self.local_port))
 		while (listen_thread_alive):
-			data, address = server.recvfrom(BUFFER_SIZE)
-			try:
-				converted_data = base64.b64decode(data).decode('utf-8')
-				addr = (socket.gethostbyaddr(address[0])[0].split(".")[0], address[1])
-				length = len(self.peers)
-				if "Peer Discovery" in converted_data:
-					for peer in converted_data.split("/")[1].split(","):
-						host_of_peer = peer.split(":")[0]
-						port_of_peer = int(peer.split(":")[1])
-						addr_of_peer = (host_of_peer, port_of_peer)
-						if addr_of_peer != (self.local_host, self.local_port) and addr_of_peer not in self.peers:
-							self.peers.add(addr_of_peer)
-					#server.sendto(str(len(self.peers)).encode('utf-8'), addr)  # send back the number of peers it has
-					server.sendto(base64.b64encode(str(len(self.peers)).encode('utf-8')), addr)
-				elif "RTT" in converted_data:
+			packet, address = server.recvfrom(BUFFER_SIZE)
+			addr = (socket.gethostbyaddr(address[0])[0].split(".")[0], address[1])
+			(src_addr, dst_addr, _, _, src_port, dst_port) = struct.unpack_from("!LLBBHH", packet)
+			src_addr = socket.inet_ntoa(struct.pack('!L', src_addr))
+			dst_addr = socket.inet_ntoa(struct.pack('!L', dst_addr))
+			(udp_seq, udp_ack_seq, control, data_len) = struct.unpack_from("!LLBH", packet, offset=26)
+			byte_data = struct.unpack_from("!" + "s" * data_len, packet, offset=-data_len)
+			data_recvd = bytes()
+			for d in byte_data:
+				data_recvd += d
+
+			if verify_ip_checksum(packet) and verify_udp_checksum(packet, data_recvd):
+				# both checksums passed; checking UDP checksum may not be necessary at the forwarder level
+				if control == ControlType.INIT.value:
+					converted_data = base64.b64decode(data_recvd).decode('utf-8')
+					length = len(self.peers)
+					if "Peer Discovery" in converted_data:
+						for peer in converted_data.split("/")[1].split(","):
+							host_of_peer = peer.split(":")[0]
+							port_of_peer = int(peer.split(":")[1])
+							addr_of_peer = (host_of_peer, port_of_peer)
+							if addr_of_peer != (self.local_host, self.local_port) and addr_of_peer not in self.peers:
+								self.peers.add(addr_of_peer)
+
+						d = base64.b64encode(str(len(self.peers)).encode('utf-8'))
+						packet = Packet(addr[1], self.local_port, socket.gethostbyname(addr[0]), socket.gethostbyname(socket.gethostname()), ControlType.INIT, d, 0, 0)
+						packet.assemble_packet()
+						server.sendto(packet.raw, addr)
+					elif "RTT" in converted_data:
+						#server.sendto(data.encode('utf-8'), addr)
+						d = base64.b64encode(converted_data.encode('utf-8'))
+						packet = Packet(addr[1], self.local_port, socket.gethostbyname(addr[0]), socket.gethostbyname(socket.gethostname()), ControlType.INIT, d, 0, 0)
+						packet.assemble_packet()
+						server.sendto(packet.raw, addr)
+						host_of_peer = converted_data.split("/")[1].split(":")[0]
+						port_of_peer = int(converted_data.split("/")[1].split(":")[1])
+						self.roles[(host_of_peer, port_of_peer)] = converted_data.split("/")[2]
+					elif "rtt_vectors" in converted_data:
 					#server.sendto(data.encode('utf-8'), addr)
-					server.sendto(base64.b64encode(converted_data.encode('utf-8')), addr)
-					host_of_peer = converted_data.split("/")[1].split(":")[0]
-					port_of_peer = int(converted_data.split("/")[1].split(":")[1])
-					self.roles[(host_of_peer, port_of_peer)] = converted_data.split("/")[2]
-				elif "Done with Initialization" in converted_data:
-					self.peers_ready.add(addr[0])
-					server.sendto(base64.b64encode(converted_data.encode('utf-8')), addr) 
-				elif "filename" in converted_data:
-					filename  = converted_data.split("/")[1]
-					self.file_received = filename
-					self.assemble_data()
-				elif "rtt_vectors" in converted_data:
-					#server.sendto(data.encode('utf-8'), addr)
-					server.sendto(base64.b64encode(converted_data.encode('utf-8')), addr)
-					if "rtt_vectors" in converted_data:
+						d = base64.b64encode(converted_data.encode('utf-8'))
+						packet = Packet(addr[1], self.local_port, socket.gethostbyname(addr[0]), socket.gethostbyname(socket.gethostname()), ControlType.INIT, d, 0, 0)
+						packet.assemble_packet()
+						server.sendto(packet.raw, addr)
 						from_host = converted_data.split("/")[1].split(":")[0]
 						from_port = int(converted_data.split("/")[1].split(":")[1])
 						rtt_vectors = converted_data.split("/")[2]
@@ -194,134 +230,113 @@ class Ringo:
 							rtt_vec[(to_host, to_port)] = float(rtt)
 						for (to_host, to_port) in rtt_vec:
 							self.rtt_matrix[(from_host, from_port, to_host, to_port)] = rtt_vec[(to_host, to_port)]
-
-			except (binascii.Error, UnicodeDecodeError) as e:
-				# these represent messages received in the form of packets (SYN, ACK, DATA, NACK, SYNACK)
-				# Note: all the above mechanism probably also need to be changed to use packets in order to ensure data integrity
-				packet = data
-				(src_addr, dst_addr, _, _, src_port, dst_port) = struct.unpack_from("!LLBBHH", packet)
-				src_addr = socket.inet_ntoa(struct.pack('!L', src_addr))
-				dst_addr = socket.inet_ntoa(struct.pack('!L', dst_addr))
-				(udp_seq, udp_ack_seq, control, data_len) = struct.unpack_from("!LLBH", packet, offset=26)
-				byte_data = struct.unpack_from("!" + "s" * data_len, packet, offset=-data_len)
-				data_recvd = bytes()
-				for d in byte_data:
-					data_recvd += d
-
-				if verify_ip_checksum(packet) and verify_udp_checksum(packet, data_recvd):
-					# both checksums passed; checking UDP checksum may not be necessary at the forwarder level
-					if control == ControlType.SYN.value:
-						# requesting establishment of connection; send back a SYN_ACK
-						print("I received a SYN from ", src_addr)
-						self.acknowledge_synchronize(src_addr, src_port) # this is where the data came from so send back to this address
-					elif control == ControlType.SYN_ACK.value:
-						# SYN_ACK means that connection is established from the sender's perspective
-						print("I received a SYN_ACK from ", src_addr)
-						self.acknowledge(src_addr, src_port, 0) # connection is established on sending direction; send back an ACK
-						self.conn_send = True
+					elif "Done with Initialization" in converted_data:
+						self.peers_ready.add(addr[0])
+						d = base64.b64encode(converted_data.encode('utf-8'))
+						packet = Packet(addr[1], self.local_port, socket.gethostbyname(addr[0]), socket.gethostbyname(socket.gethostname()), ControlType.INIT, d, 0, 0)
+						packet.assemble_packet()
+						server.sendto(packet.raw, addr)
+							
+				if control == ControlType.SYN.value:
+					# requesting establishment of connection; send back a SYN_ACK
+					self.acknowledge_synchronize(src_addr, src_port) # this is where the data came from so send back to this address
+				elif control == ControlType.SYN_ACK.value:
+					# SYN_ACK means that connection is established from the sender's perspective
+					self.acknowledge(src_addr, src_port, 0) # connection is established on sending direction; send back an ACK
+					self.conn_send = True
+					print("3-way handshake is complete with ", src_addr)
+				elif control == ControlType.ACK.value:
+					# if conn_established is False, it's an ACK for the SYN_ACK so connection established on receiving direction as well; do nothing
+					# else it represents ACK for DATA: if forwarder then move along the packet in the backward direction; if sender, send next fragment of data
+					# also if this ACK is for DATA, udp_ack_seq will be > 0
+					if udp_ack_seq == 0:
 						print("3-way handshake is complete with ", src_addr)
-					elif control == ControlType.ACK.value:
-						# if conn_established is False, it's an ACK for the SYN_ACK so connection established on receiving direction as well; do nothing
-						# else it represents ACK for DATA: if forwarder then move along the packet in the backward direction; if sender, send next fragment of data
-						# also if this ACK is for DATA, udp_ack_seq will be > 0
-						print('I received an ACK with ack seq', udp_ack_seq)
-						if udp_ack_seq == 0:
-							print("3-way handshake is complete with ", src_addr)
-							self.conn_recv = True
-						else:
-							if self.role == "F":
-								if (self.local_host, self.local_port) in self.path:
-									index = self.path.index((self.local_host, self.local_port)) 
-									self.acknowledge(self.path[index-1][0], self.path[index-1][1], udp_ack_seq)
-							elif self.role == "S":
-								# send next data fragment
-								self.bytes_sent_successfully = udp_ack_seq - self.starting_seq_no
-								print('bytes sent successfully ', self.bytes_sent_successfully)
-								if self.bytes_sent_successfully % 475 != 0:
-									print('here is the error, udp seq recvd ', udp_ack_seq)
-							else:
-								# if R, this should only happen during connection establishment which is handled earlier so this shouldn't happen
-								print("The Receiver should not have received an ACK. Something is wrong")
-			
-					elif control == ControlType.DATA.value:
-						# if forwarder then move along the packet in forward direction; if receiver, then save data and send back ACK
-						print("I received a DATA packet with seq ", udp_seq)
+						self.conn_recv = True
+					else:
 						if self.role == "F":
 							if (self.local_host, self.local_port) in self.path:
 								index = self.path.index((self.local_host, self.local_port)) 
-								packet = Packet(self.path[index+1][1], self.local_port, socket.gethostbyname(self.path[index+1][0]), socket.gethostbyname(socket.gethostname()), ControlType.DATA, data_recvd, udp_seq, 0)
-								self.forward_data(self.path[index+1][0], self.path[index+1][1], packet)
-						elif self.role == "R":
-							if len(self.last_data_recvd) == 0:
+								self.acknowledge(self.path[index-1][0], self.path[index-1][1], udp_ack_seq)
+						elif self.role == "S":
+							# send next data fragment
+							self.bytes_sent_successfully = udp_ack_seq - self.starting_seq_no
+						else:
+							# if R, this should only happen during connection establishment which is handled earlier so this shouldn't happen
+							print("The Receiver should not have received an ACK. Something is wrong")
+		
+				elif control == ControlType.DATA.value:
+					# if forwarder then move along the packet in forward direction; if receiver, then save data and send back ACK
+					if self.role == "F":
+						if (self.local_host, self.local_port) in self.path:
+							index = self.path.index((self.local_host, self.local_port)) 
+							packet = Packet(self.path[index+1][1], self.local_port, socket.gethostbyname(self.path[index+1][0]), socket.gethostbyname(socket.gethostname()), ControlType.DATA, data_recvd, udp_seq, 0)
+							self.forward_data(self.path[index+1][0], self.path[index+1][1], packet)
+					elif self.role == "R":
+						if len(self.last_data_recvd) == 0:
+							self.last_data_recvd = data_recvd
+							self.data_recvd += data_recvd
+							ack_seq_to_send = udp_seq + len(data_recvd)
+							self.acknowledge(src_addr, src_port, ack_seq_to_send) # collect the data; use length of total data received as udp_ack_seq
+						else:
+							# only collect the data if it's not already received
+							if self.last_data_recvd  != data_recvd:
 								self.last_data_recvd = data_recvd
 								self.data_recvd += data_recvd
-								if len(self.data_recvd) % 475 != 0:
-									print('here is the error. got data of size ', len(data_recvd))
 								ack_seq_to_send = udp_seq + len(data_recvd)
 								self.acknowledge(src_addr, src_port, ack_seq_to_send) # collect the data; use length of total data received as udp_ack_seq
-							else:
-								# only collect the data if it's not already received
-								if self.last_data_recvd  != data_recvd:
-									self.last_data_recvd = data_recvd
-									self.data_recvd += data_recvd
-									if len(self.data_recvd) % 475 != 0:
-										print('here is the error. got data of size ', len(data_recvd))
-									ack_seq_to_send = udp_seq + len(data_recvd)
-									self.acknowledge(src_addr, src_port, ack_seq_to_send) # collect the data; use length of total data received as udp_ack_seq
-							self.acknowledge(src_addr, src_port, ack_seq_to_send)  # or should it be ack_seq_to_send?
-						elif self.role == "S":
-							# possibly means that the path has been changed to the opposite direction. Therefore, forward data to next Ringo in opposite direction. This should be index+1 if ringo.path is updated.
-							print('Looks like one of the Ringos in the optimal path went offline. Changing direction of data transfer')
-					elif control == ControlType.NACK.value:
-						# used for corrupted data; if forwarder then move along the packet in the backward direction; if sender, send the SAME fragment of data again
-						print("I received a NACK from ", src_addr)
-						if self.role == "F":
-							if (self.local_host, self.local_port) in self.path:
-								index = self.path.index((self.local_host, self.local_port)) 
-								self.neg_acknowledge(self.path[index-1][0], path[index-1][1])
-						elif self.role == "S":
-							# RESEND CURRENT DATA FRAGMENT
-							self.got_nack = True
-							print('resend current data')
+						self.acknowledge(src_addr, src_port, ack_seq_to_send)  # or should it be ack_seq_to_send?
+					elif self.role == "S":
+						# possibly means that the path has been changed to the opposite direction. Therefore, forward data to next Ringo in opposite direction. This should be index+1 if ringo.path is updated.
+						print('Looks like one of the Ringos in the optimal path went offline. Changing direction of data transfer')
+				elif control == ControlType.NACK.value:
+					# used for corrupted data; if forwarder then move along the packet in the backward direction; if sender, send the SAME fragment of data again
+					if self.role == "F":
+						if (self.local_host, self.local_port) in self.path:
+							index = self.path.index((self.local_host, self.local_port)) 
+							self.neg_acknowledge(self.path[index-1][0], path[index-1][1])
+					elif self.role == "S":
+						# RESEND CURRENT DATA FRAGMENT
+						self.got_nack = True
 
-					elif control == ControlType.FIN.value:
-						# used to end connection; this is an indication to the receiver that the received bytes can now be reconstructed; if forwarder, send along the data
-						print("I received a FIN from ", src_addr) 
-						if self.role == "R":
-							index = self.path.index((self.local_host, self.local_port))
-							print('finished receiving entire file')
-							self.file_received = base64.b64decode(data_recvd)
-							self.assemble_data()
-							self.acknowledge_fin(self.path[index-1][0], self.path[index-1][1])
-						elif self.role == "F":
-							if (self.local_host, self.local_port) in self.path:
-								index = self.path.index((self.local_host, self.local_port))
-								self.finish(self.path[index+1][0], self.path[index+1][1], data_recvd)
-
-					elif control == ControlType.ACK_FIN.value:
-						print("I received an ACK FIN from ", src_addr)
-						if self.role == "S":
-							self.fin_sent = True
-						elif self.role == "F":
-							if (self.local_host, self.local_port) in self.path:
-								index = self.path.index((self.local_host, self.local_port)) 
-								self.acknowledge_fin(self.path[index-1][0], self.path[index-1][1])
-
-				else:
-					# send a NACK packet backwards along the path until received by Sender
+				elif control == ControlType.FIN.value:
+					# used to end connection; this is an indication to the receiver that the received bytes can now be reconstructed; if forwarder, send along the data
 					if self.role == "R":
-						if control == ControlType.DATA.value:
-							index = self.path.index((self.local_host, self.local_port))
-							print("I received a corrupted data packet from " + src_addr)
-							self.neg_acknowledge(self.path[index-1][0], self.path[index-1][1])
-					elif self.role == "F" and control == ControlType.DATA.value:
+						print('Finished receiving entire file.')
+						self.file_received = base64.b64decode(data_recvd).decode('utf-8')
+						self.assemble_data()
+						index = self.path.index((self.local_host, self.local_port))
+						self.acknowledge_fin(self.path[index-1][0], self.path[index-1][1])
+					elif self.role == "F":
+						print('received FIN from ', addr[0])
 						if (self.local_host, self.local_port) in self.path:
 							index = self.path.index((self.local_host, self.local_port))
-							print("I received a corrupted data packet from " + src_addr)
-							self.neg_acknowledge(self.path[index-1][0], self.path[index-1][1])
-					else:
-						# Sender gets corrupted packet. Assume previous packet not sent correctly.
-						self.got_nack = True
+							self.finish(self.path[index+1][0], self.path[index+1][1], data_recvd)
+							print('i am on the optimal path for FIN so sending it to ', self.path[index+1][1])
+
+				elif control == ControlType.ACK_FIN.value:
+					print('received an ack fin')
+					if self.role == "S":
+						print('sender got ack fin; changing to True')
+						self.fin_sent = True
+					elif self.role == "F":
+						if (self.local_host, self.local_port) in self.path:
+							index = self.path.index((self.local_host, self.local_port)) 
+							print('forwarding ack fin to ', self.path[index-1][1])
+							self.acknowledge_fin(self.path[index-1][0], self.path[index-1][1])
+
+			else:
+				# send a NACK packet backwards along the path until received by Sender
+				if self.role == "R":
+					if control == ControlType.DATA.value:
+						index = self.path.index((self.local_host, self.local_port))
+						self.neg_acknowledge(self.path[index-1][0], self.path[index-1][1])
+				elif self.role == "F" and control == ControlType.DATA.value:
+					if (self.local_host, self.local_port) in self.path:
+						index = self.path.index((self.local_host, self.local_port))
+						self.neg_acknowledge(self.path[index-1][0], self.path[index-1][1])
+				else:
+					# Sender gets corrupted packet. Assume previous packet not sent correctly.
+					self.got_nack = True
 
 
 	def listen_keep_alive(self):
@@ -330,46 +345,32 @@ class Ringo:
 		server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 		server.bind((socket.gethostname(), self.keep_alive_port))
 		while (keep_alive_listen_thread_alive):
-			data, address = server.recvfrom(65535)
-			converted_data = base64.b64decode(data).decode('utf-8')
+			packet, address = server.recvfrom(65535)
+			self.acknowledge_keep_alive(address[0], address[1])
 			addr = (socket.gethostbyaddr(address[0])[0].split(".")[0], address[1])
-			if "###" in converted_data:
-				server.sendto(base64.b64encode(converted_data.encode('utf-8')), addr)
-				if not self.peers or not self.rtt_matrix or not self.rtt_vector or not self.roles:
-					print('I just work up. I am updating my peers, roles and RTTs')
-					self.decode_keep_alive_msg(converted_data)
-					self.choose_path()  # get optimal path
-				
-				peers = converted_data.split("###")[1].split("/")[1].split("&")
-				for peer in peers:
-					if peer.split(":")[0] == socket.gethostbyaddr(address[0])[0].split(".")[0]:
-						self.active_ringo_map[(socket.gethostbyaddr(address[0])[0].split(".")[0], int(peer.split(":")[1]))] = True
-			# packet, address = server.recvfrom(BUFFER_SIZE)
-			# addr = (socket.gethostbyaddr(address[0])[0].split(".")[0], address[1])
-			# (src_addr, dst_addr, _, _, src_port, dst_port) = struct.unpack_from("!LLBBHH", packet)
-			# src_addr = socket.inet_ntoa(struct.pack('!L', src_addr))
-			# dst_addr = socket.inet_ntoa(struct.pack('!L', dst_addr))
-			# (udp_seq, udp_ack_seq, control, data_len) = struct.unpack_from("!LLBH", packet, offset=26)
-			# byte_data = struct.unpack_from("!" + "s" * data_len, packet, offset=-data_len)
-			# data_recvd = bytes()
-			# for d in byte_data:
-			# 	data_recvd += d
+			(src_addr, dst_addr, _, _, src_port, dst_port) = struct.unpack_from("!LLBBHH", packet)
+			src_addr = socket.inet_ntoa(struct.pack('!L', src_addr))
+			dst_addr = socket.inet_ntoa(struct.pack('!L', dst_addr))
+			(udp_seq, udp_ack_seq, control, data_len) = struct.unpack_from("!LLBH", packet, offset=26)
+			data_length = len(packet) - 37
+			byte_data = struct.unpack_from("!" + "s" * data_length, packet, offset=-data_length)
+			data_recvd = bytes()
+			for d in byte_data:
+				data_recvd += d
 
-			# if verify_ip_checksum(packet) and verify_udp_checksum(packet, data_recvd):
-			# 	print(base64.b64decode(data_recvd))
-			# 	if control == ControlType.KEEP_ALIVE.value:
-			# 		print('i got a keep alive message from ', src_addr)
-			# 		if not self.peers or not self.rtt_matrix or not self.rtt_vector or not self.roles:
-			# 			# this Ringo has just woken up: don't recalculate anything; use information from others
-			# 			print('i am updating my peers, roles and RTTs')
-			# 			self.decode_keep_alive_msg(base64.b64decode(data_recvd))
-			# 			self.choose_path()  # get optimal path
-
-			# 		self.active_ringo_map[(socket.gethostbyaddr(src_addr)[0].split(".")[0], src_port)] = True
-			# 		self.acknowledge_keep_alive(src_addr, src_port)
-			# 	elif control == ControlType.KEEP_ALIVE_ACK.value:
-			# 		print('i received an ack for the Keep Alive from ', src_addr)
-			# 		self.active_ringo_map[(socket.gethostbyaddr(src_addr)[0].split(".")[0], src_port)] = True
+			if verify_ip_checksum(packet) and verify_udp_checksum(packet, data_recvd):
+				if control == ControlType.KEEP_ALIVE.value:
+					data_recvd = base64.b64decode(data_recvd).decode('utf-8')
+					if "###" in data_recvd:
+						if not self.peers or not self.rtt_matrix or not self.rtt_vector or not self.roles:
+							print('I just woke up. I am updating my peers, peer-roles, RTTs and RTT matrix')
+							self.decode_keep_alive_msg(data_recvd)
+							self.choose_path()  # get optimal path
+					
+						peers = data_recvd.split("###")[1].split("/")[1].split("&")
+						for peer in peers:
+							if peer.split(":")[0] == socket.gethostbyaddr(address[0])[0].split(".")[0]:
+								self.active_ringo_map[(socket.gethostbyaddr(address[0])[0].split(".")[0], int(peer.split(":")[1]))] = True
 
 
 	def initialize_rtt_vector(self):
@@ -386,24 +387,39 @@ class Ringo:
 			counter = 0
 			time_diff = 0
 			while counter < 4:
-				try:
-					send_time = time.time() * 1000  # time in ms
-					msg = "RTT/" + self.local_host + ":" + str(self.local_port) + "/" + self.role
-					#_ = s.sendto(msg.encode('utf-8'), peer)
-					_ = s.sendto(base64.b64encode(msg.encode('utf-8')), peer)
-					data_sent, _ = s.recvfrom(BUFFER_SIZE)
-					data_sent = base64.b64decode(data_sent).decode('utf-8')
-					while data_sent != msg:
-						_ = s.sendto(base64.b64encode(msg.encode('utf-8')), peer)
-						data_sent, _ = s.recvfrom(BUFFER_SIZE)
-						data_sent = base64.b64decode(data_sent).decode('utf-8')
-					if data_sent == msg:
-						counter += 1
-						recv_time = time.time() * 1000
-						time_diff += recv_time - send_time
-						# self.rtt_vector[peer_ip] = recv_time - send_time
-				except socket.timeout:
-					pass
+				success = False
+				while not success:
+					try:
+						send_time = time.time() * 1000  # time in ms
+						msg = "RTT/" + self.local_host + ":" + str(self.local_port) + "/" + self.role
+						#_ = s.sendto(msg.encode('utf-8'), peer)
+
+						data = base64.b64encode(msg.encode('utf-8'))
+						packet = Packet(peer[1], self.local_port, socket.gethostbyname(peer[0]), socket.gethostbyname(socket.gethostname()), ControlType.INIT, data, 0, 0)
+						packet.assemble_packet()
+						_ = s.sendto(packet.raw, peer)
+						data_sent, _ = s.recvfrom(65535)
+						(src_addr, dst_addr, _, _, src_port, dst_port) = struct.unpack_from("!LLBBHH", data_sent)
+						src_addr = socket.inet_ntoa(struct.pack('!L', src_addr))
+						dst_addr = socket.inet_ntoa(struct.pack('!L', dst_addr))
+						(udp_seq, udp_ack_seq, control, data_len) = struct.unpack_from("!LLBH", data_sent, offset=26)
+						data_length = len(data_sent) - 37
+						byte_data = struct.unpack_from("!" + "s" * data_length, data_sent, offset=-data_length)
+						data_recvd = bytes()
+						for d in byte_data:
+							data_recvd += d
+
+						if verify_ip_checksum(data_sent) and verify_udp_checksum(data_sent, data_recvd):
+							if control == ControlType.INIT.value:
+								data_recvd = base64.b64decode(data_recvd).decode('utf-8')
+								if data_recvd == msg:
+									success = True
+									counter += 1 
+									recv_time = time.time() * 1000
+									time_diff += recv_time - send_time
+
+					except socket.timeout:
+						pass
 			self.rtt_vector[peer] = time_diff / 4
 		pass
 		s.close()
@@ -421,16 +437,27 @@ class Ringo:
 			while not success:
 				try:
 					time.sleep(0.25)
-					#_ = s.sendto(msg.encode('utf-8'), peer)
-					_ = s.sendto(base64.b64encode(msg.encode('utf-8')), peer)
-					data_sent, _ = s.recvfrom(BUFFER_SIZE)
-					data_sent = base64.b64decode(data_sent).decode('utf-8')
-					while data_sent != msg:
-						_ = s.sendto(base64.b64encode(msg.encode('utf-8')), peer)
-						data_sent, _ = s.recvfrom(BUFFER_SIZE)
-						data_sent = base64.b64decode(data_sent).decode('utf-8')
-					success = True
-				# handle: try again
+					data = base64.b64encode(msg.encode('utf-8'))
+					packet = Packet(peer[1], self.local_port, socket.gethostbyname(peer[0]), socket.gethostbyname(socket.gethostname()), ControlType.INIT, data, 0, 0)
+					packet.assemble_packet()
+					_ = s.sendto(packet.raw, peer)
+					data_sent, _ = s.recvfrom(65535)
+					(src_addr, dst_addr, _, _, src_port, dst_port) = struct.unpack_from("!LLBBHH", data_sent)
+					src_addr = socket.inet_ntoa(struct.pack('!L', src_addr))
+					dst_addr = socket.inet_ntoa(struct.pack('!L', dst_addr))
+					(udp_seq, udp_ack_seq, control, data_len) = struct.unpack_from("!LLBH", data_sent, offset=26)
+					data_length = len(data_sent) - 37
+					byte_data = struct.unpack_from("!" + "s" * data_length, data_sent, offset=-data_length)
+					data_recvd = bytes()
+					for d in byte_data:
+						data_recvd += d
+
+					if verify_ip_checksum(data_sent) and verify_udp_checksum(data_sent, data_recvd):
+						if control == ControlType.INIT.value:
+							data_recvd = base64.b64decode(data_recvd).decode('utf-8')
+							if data_recvd == msg:
+								success = True
+
 				except socket.timeout:
 					pass
 		
@@ -522,18 +549,39 @@ class Ringo:
 		msg = "Done with Initialization"
 		while len(self.peers_ready) != self.n-1:
 			for peer in self.peers:
-				try:
-					time.sleep(0.5)
-					_ = s.sendto(base64.b64encode(msg.encode('utf-8')), peer)
-					data_sent, _ = s.recvfrom(BUFFER_SIZE)
-					data_sent = base64.b64decode(data_sent).decode('utf-8')
-				# handle: try again
-				except socket.timeout:
-					pass
+				success = False
+				while not success:
+					try:
+						time.sleep(0.5)
+
+						data = base64.b64encode(msg.encode('utf-8'))
+						packet = Packet(peer[1], self.local_port, socket.gethostbyname(peer[0]), socket.gethostbyname(socket.gethostname()), ControlType.INIT, data, 0, 0)
+						packet.assemble_packet()
+						_ = s.sendto(packet.raw, peer)
+						data_sent, _ = s.recvfrom(65535)
+						(src_addr, dst_addr, _, _, src_port, dst_port) = struct.unpack_from("!LLBBHH", data_sent)
+						src_addr = socket.inet_ntoa(struct.pack('!L', src_addr))
+						dst_addr = socket.inet_ntoa(struct.pack('!L', dst_addr))
+						(udp_seq, udp_ack_seq, control, data_len) = struct.unpack_from("!LLBH", data_sent, offset=26)
+						data_length = len(data_sent) - 37
+						byte_data = struct.unpack_from("!" + "s" * data_length, data_sent, offset=-data_length)
+						data_recvd = bytes()
+						for d in byte_data:
+							data_recvd += d
+
+						if verify_ip_checksum(data_sent) and verify_udp_checksum(data_sent, data_recvd):
+							if control == ControlType.INIT.value:
+								data_recvd = base64.b64decode(data_recvd).decode('utf-8')
+								if data_recvd == msg:
+									success = True
+					# handle: try again
+					except socket.timeout:
+						pass
 
 		s.close()
 		while len(self.peers_ready) < self.n-1:
 			time.sleep(0.05)
+		print('Done with initialization.')
 		return
 
 	# This method gives the best path and worst path (to be used when one of the ringos go offline in the best path)
@@ -726,7 +774,7 @@ class Ringo:
 		s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 		send_complete = False
 		bytes_sent_attempted = 0
-		timeout = self.data_tx_rtt * 5 # take a 100% overhead on timeout based on total RTT from S to R (including hops to/from forwarders)
+		timeout = self.data_tx_rtt * 3 # take a 300% overhead on timeout based on total RTT from S to R (including hops to/from forwarders)
 		# Average of RTT as timeout has proven to be unreliable measure of reality as of now; 
 		# maybe do RTT calculations not based on an average of 3 trials but 50 trials?
 		for i in range(0, len(encoded_data), DATA_PER_PACKET): # change 3 to len(data)/ for now testing sending first packet
@@ -749,11 +797,12 @@ class Ringo:
 				packet.assemble_packet()
 				# this means that we haven't yet hit timeout and haven't received a NACK
 				while time.time() * 1000 - send_time < timeout and not self.got_nack:
+					if self.bytes_sent_successfully == bytes_sent_attempted:
+						break
 					time.sleep(0.001) # sleep for 1 ms
 					continue
 				
 				# need to retransmit data
-				print('timed out in sending file. Either there are lost packets or t/o is set too low.')
 				send_time = time.time() * 1000
 				s.sendto(packet.raw, self.path[1])
 				if self.got_nack:
@@ -763,7 +812,7 @@ class Ringo:
 			seq_no += len(data_fragment) # data successfully sent so update sequence number
 
 		s.close()
-		#self.send_filename(filename)
+		print('calling finish')
 		self.finish(self.path[1][0], self.path[1][1], base64.b64encode(filename.encode('utf-8'))) # at end of sending the entire file AND receivng an ACK for the last packet, send FIN packet
 		return
 
@@ -790,7 +839,6 @@ class Ringo:
 		s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 		data = base64.b64encode(b'')
 		packet = Packet(dst_port, self.local_port, socket.gethostbyname(dst_addr), socket.gethostbyname(socket.gethostname()), ControlType.ACK, data, 0, udp_ack_seq) # dst_port, src_port, dst_ip, src_ip, control_type, data, udp_seq=0, udp_ack_seq=0
-		print('sending an ack with ack seq ', packet.udp_ack_seq)
 		packet.assemble_packet()
 		# only send once
 		success = False
@@ -825,12 +873,14 @@ class Ringo:
 
 	def acknowledge_fin(self, dst_addr, dst_port):
 		s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+		s.settimeout(2)
 		data = base64.b64encode(b'')
 		packet = Packet(dst_port, self.local_port, socket.gethostbyname(dst_addr), socket.gethostbyname(socket.gethostname()), ControlType.ACK_FIN, data, 0, 0)
 		packet.assemble_packet()
 		# only send once
 		success = False
 		while not success:
+			print('stuck in acknowledging FIN')
 			try:
 				time.sleep(0.1)
 				_ = s.sendto(packet.raw, (dst_addr, dst_port))
@@ -857,33 +907,6 @@ class Ringo:
 		s.close()
 
 
-	def send_filename(self, filename):
-		s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-		s.settimeout(2)
-		msg = "filename/" + filename
-		for peer in self.roles:
-			# From Sender To Receiver
-			if self.roles[peer] == "R":
-				success = False
-				while not success:
-					try:
-						time.sleep(0.5)
-						_ = s.sendto(base64.b64encode(msg.encode('utf-8')), peer)
-						data_sent, _ = s.recvfrom(BUFFER_SIZE)
-						data_sent = base64.b64decode(data_sent).decode('utf-8')
-						while data_sent != msg:
-							_ = s.sendto(base64.b64encode(msg.encode('utf-8')), peer)
-							data_sent, _ = s.recvfrom(BUFFER_SIZE)
-							data_sent = base64.b64decode(data_sent).decode('utf-8')
-						success = True
-					# handle: try again
-					except socket.timeout:
-						pass
-
-		s.close()
-		print('Done sending filename')
-		return
-
 	def finish(self, dst_addr, dst_port, filename):
 		s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 		data = filename
@@ -891,6 +914,7 @@ class Ringo:
 		packet.assemble_packet()
 		success = False
 		while not self.fin_sent:
+			print("I'm still here in the finish method; sending to ", dst_addr)
 			timeout = self.data_tx_rtt * 20
 			while not success:
 				try:
@@ -900,6 +924,7 @@ class Ringo:
 				except socket.timeout:
 					pass
 			time.sleep(timeout)
+
 
 		self.starting_seq_no = random.randint(1, 1000000000)
 		self.bytes_sent_successfully = 0   
@@ -950,33 +975,44 @@ class Ringo:
 					msg += from_addr + ":" + str(from_port) + "," + to_addr + ":" + str(to_port) +  "=" + str(self.rtt_matrix[(from_addr, from_port, to_addr, to_port)]) + "&"
 
 				msg = msg[:-1]
-				msg = base64.b64encode(msg.encode('utf-8'))
+				data = base64.b64encode(msg.encode('utf-8'))
+				# packet inputs = dst_port, src_port, dst_ip, src_ip, control_type, data, udp_seq, udp_ack_seq
+				#msg = base64.b64encode(msg.encode('utf-8'))
 				self.active_ringo_map = {}
 				self.active_ringo_map[(self.local_host, self.local_port)] = True
-				loop_time = time.time()
 				for peer in self.peers:
-					# ping each peer 5 times. If failed both times then that ringo is offline
+					# ping each peer continuously for 7.5 seconds. If failed both times then that ringo is offline
 					start_time = time.time() # time since packet sent in s
 					time_elapsed = 0
-					while peer not in self.active_ringo_map and time_elapsed < 14:
+					while peer not in self.active_ringo_map and time_elapsed < 10:
 						# skip if pinging succeeded in first trial
 						if peer in self.active_ringo_map:
 							continue
 						
 						(dst_addr, dst_port) = peer
+						packet = Packet(self.keep_alive_port, self.local_port, socket.gethostbyname(dst_addr), socket.gethostbyname(socket.gethostname()), ControlType.KEEP_ALIVE, data, 0, 0)
+						packet.assemble_packet()
 						time.sleep(0.25)
 						try:
-							_ = s.sendto(msg, (dst_addr, self.keep_alive_port))
+							_ = s.sendto(packet.raw, (dst_addr, self.keep_alive_port))
 							data_sent, _ = s.recvfrom(65535)
-							if data_sent == msg:
-								self.active_ringo_map[peer] = True		
+							(src_addr, dst_addr, _, _, src_port, dst_port) = struct.unpack_from("!LLBBHH", data_sent)
+							src_addr = socket.inet_ntoa(struct.pack('!L', src_addr))
+							dst_addr = socket.inet_ntoa(struct.pack('!L', dst_addr))
+							(udp_seq, udp_ack_seq, control, data_len) = struct.unpack_from("!LLBH", data_sent, offset=26)
+							byte_data = struct.unpack_from("!" + "s" * data_len, data_sent, offset=-data_len)
+							data_recvd = bytes()
+							for d in byte_data:
+								data_recvd += d
+
+							if verify_ip_checksum(data_sent) and verify_udp_checksum(data_sent, data_recvd):
+								if control == ControlType.KEEP_ALIVE_ACK.value:
+									self.active_ringo_map[peer] = True		
 						except socket.timeout:
 							pass
 						time_elapsed = time.time() - start_time
 
-					time_elapsed = time.time() - start_time
-
-				time_looped = time.time() - loop_time
+				time.sleep(1)
 				
 				if sorted(self.active_ringos) != sorted(set(list(self.active_ringo_map.keys()))):
 					self.active_ringos = set(list(self.active_ringo_map.keys()))
@@ -987,12 +1023,12 @@ class Ringo:
 	def acknowledge_keep_alive(self, dst_addr, dst_port):
 		s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 		data = base64.b64encode(b'')
-		packet = Packet(self.keep_alive_port, self.local_port, socket.gethostbyname(dst_addr), socket.gethostbyname(socket.gethostname()), ControlType.KEEP_ALIVE_ACK, data, 0, 0)
+		packet = Packet(dst_port, self.local_port, socket.gethostbyname(dst_addr), socket.gethostbyname(socket.gethostname()), ControlType.KEEP_ALIVE_ACK, data, 0, 0)
 		packet.assemble_packet()
 		# only send once
 		success = False
 		try:
-			_ = s.sendto(packet.raw, (dst_addr, self.keep_alive_port))
+			_ = s.sendto(packet.raw, (dst_addr, dst_port))
 		except socket.timeout:
 			pass
 
@@ -1102,6 +1138,7 @@ def main():
 		elif "disconnect" in command_input:
 			offline_time = int(command_input.split(" ")[1])
 			if ringo.role == "S" or ringo.role == "R":
+				print(" The Sender and Receiver cannot go offline. Only Forwarders can.")
 				continue
 
 			listen_thread_alive = False

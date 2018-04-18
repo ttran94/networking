@@ -13,7 +13,7 @@ class ControlType(Enum):
 	FIN = 4
 	DATA = 5
 	SYN_ACK = 6
-	INIT = 7  # use for all initialization communication # RTT, RTT Matrix, Peer Disovery etc.
+	INIT = 7
 	ACK_FIN = 8
 	KEEP_ALIVE = 9
 	KEEP_ALIVE_ACK = 10
